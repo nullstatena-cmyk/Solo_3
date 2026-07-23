@@ -82,6 +82,68 @@
   <div id="toasts" class="toasts"></div>
   <input type="file" id="file-input" class="hidden" />
 
+  <!--
+    Boot watchdog. If any module in the graph 404s or throws, the browser aborts
+    the whole of app.js and the page sits there blank with nothing wired up — and
+    app.js can't report that, because app.js is what failed. So this runs first,
+    as a classic script, and paints the reason onto the page. Mostly it catches a
+    stale deploy: a new file that hasn't landed on Pages yet, or a cached app.js
+    that imports one.
+  -->
+  <script>
+    (function () {
+      var shown = false;
+      function panic(what, detail) {
+        if (shown) return;
+        shown = true;
+        var d = document.createElement('div');
+        d.setAttribute('role', 'alert');
+        d.style.cssText =
+          'position:fixed;inset:0;z-index:99999;overflow:auto;padding:24px 20px;' +
+          'background:#141821;color:#e6e8ee;font:14px/1.6 ui-monospace,Menlo,Consolas,monospace;';
+        d.innerHTML =
+          '<div style="max-width:640px;margin:0 auto">' +
+          '<div style="font-size:17px;font-weight:700;color:#e5786d;margin-bottom:6px">The app failed to start</div>' +
+          '<div style="opacity:.75;margin-bottom:16px">Nothing loaded, so nothing on the page is clickable.</div>' +
+          '<div style="background:#0e1219;border:1px solid #2a3142;border-radius:8px;padding:12px;word-break:break-word;white-space:pre-wrap">' +
+          what + (detail ? '\n\n' + detail : '') +
+          '</div>' +
+          '<div style="opacity:.75;margin-top:16px">Usually a stale deploy. Hard-reload, or open the site in a private tab. ' +
+          'If it names a file, check that file is actually on the live site.</div>' +
+          '<button id="pnc" style="margin-top:16px;padding:10px 16px;border-radius:8px;border:0;' +
+          'background:#6b7cff;color:#fff;font:inherit">Reload</button></div>';
+        (document.body || document.documentElement).appendChild(d);
+        var b = document.getElementById('pnc');
+        if (b) b.onclick = function () { location.reload(); };
+      }
+
+      // Failed subresource (a module that 404s) — fires in the capture phase with
+      // no message, so the target is the only clue about what went missing.
+      window.addEventListener('error', function (e) {
+        if (e && e.target && e.target !== window && (e.target.src || e.target.href)) {
+          panic('Could not load: ' + (e.target.src || e.target.href));
+        } else if (e && e.message) {
+          panic(e.message, e.filename ? e.filename + ':' + e.lineno : '');
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (e) {
+        panic('Unhandled error during startup', e && e.reason ? String(e.reason) : '');
+      });
+
+      // If the module graph never finishes, boot() never runs and no error may
+      // fire at all. Say so rather than leaving a blank page.
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (!window.__soloBooted) {
+            panic('The app scripts loaded but never started.',
+                  'Most likely a module in src/ is missing or failed to parse.');
+          }
+        }, 2500);
+      });
+    })();
+  </script>
+
   <script type="module" src="./src/app.js"></script>
 </body>
 </html>
