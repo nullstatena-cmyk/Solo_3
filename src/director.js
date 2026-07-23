@@ -20,6 +20,8 @@ export function newSceneState(presentIds = []) {
     pending: [], // scheduled time-gated events: {id, at, text, enter:[id], fired}
     timeline: [], // {at, text} — notable beats, for the panel and "just now"
     justNow: [], // texts of events that fired this step; shown once in next prompt
+    staging: {}, // castId -> where they physically are; feeds the room block
+    bonds: {}, // castId -> how they feel about the persona right now
   };
 }
 
@@ -34,6 +36,8 @@ export function ensureSceneState(state, presentIds = []) {
     pending: Array.isArray(state.pending) ? state.pending : [],
     timeline: Array.isArray(state.timeline) ? state.timeline : [],
     justNow: Array.isArray(state.justNow) ? state.justNow : [],
+    staging: state.staging && typeof state.staging === 'object' ? { ...state.staging } : {},
+    bonds: state.bonds && typeof state.bonds === 'object' ? { ...state.bonds } : {},
   };
 }
 
@@ -45,6 +49,8 @@ const clone = (s) => ({
   pending: s.pending.map((e) => ({ ...e, enter: [...(e.enter || [])] })),
   timeline: [...s.timeline],
   justNow: [...s.justNow],
+  staging: { ...(s.staging || {}) },
+  bonds: { ...(s.bonds || {}) },
 });
 
 const evId = () => `evt_${Math.random().toString(36).slice(2, 8)}`;
@@ -136,6 +142,14 @@ export function applyDirection(state, direction, resolve) {
   for (const id of ids(d.left)) s = removeFromScene(s, id);
   for (const id of ids(d.sentAway)) s = sendAway(s, id);
 
+  if (d.staging && Object.keys(d.staging).length) {
+    s.staging = { ...(s.staging || {}) };
+    for (const [name, where] of Object.entries(d.staging)) {
+      const id = resolve(name);
+      if (id) s.staging[id] = where;
+    }
+  }
+
   for (const ev of d.events || []) {
     const at = s.clock + Math.max(0, Math.round(ev.inMinutes || 0));
     s = schedule(s, { at, text: ev.text || '', enter: (ev.enter || []).map((n) => resolve(n)).filter(Boolean) });
@@ -155,12 +169,15 @@ export function buildDirectorMessages({ exchangeText = '', roster = [], present 
     `In-universe time so far: ${fmtClock(clock)}.\n\n` +
     `Report ONLY what the exchange shows or clearly implies. If nothing changed, use 0 and empty lists. ` +
     `Output ONLY a JSON object, no prose, in exactly this shape:\n` +
-    `{"elapsed_minutes":0,"entered":[],"left":[],"sent_away":[],"returned":[],"events":[{"in_minutes":5,"text":"what will happen","enter":["Name"]}]}\n\n` +
+    `{"elapsed_minutes":0,"entered":[],"left":[],"sent_away":[],"returned":[],"staging":{},"events":[{"in_minutes":5,"text":"what will happen","enter":["Name"]}]}\n\n` +
     `Meaning: elapsed_minutes = in-universe minutes that passed in this exchange (usually 0-5). ` +
     `entered = names who joined the scene. left = names who stepped out but remain nearby. ` +
     `sent_away = names who left for elsewhere (e.g. carried to medical) and won't be right back. ` +
     `returned = names who came back. events = future consequences that should happen after a delay, ` +
-    `each with the in-universe minutes until it happens and any names who arrive then.`;
+    `each with the in-universe minutes until it happens and any names who arrive then. `+
+    `staging = for each present name, at most eight words on where they physically are and what `+
+    `their body is doing right now, e.g. {"Artemis":"behind the van, bow half-drawn"}. `+
+    `Include every present name. Physical position only — no feelings, no dialogue.`;
   const user = `Latest exchange:\n${exchangeText}\n\nReport the scene changes as JSON.`;
   return [
     { role: 'system', content: system },
@@ -170,7 +187,7 @@ export function buildDirectorMessages({ exchangeText = '', roster = [], present 
 
 // Robustly pull the JSON object out of a model reply and normalize it.
 export function parseDirection(text) {
-  const empty = { elapsedMinutes: 0, entered: [], left: [], sentAway: [], returned: [], events: [] };
+  const empty = { elapsedMinutes: 0, entered: [], left: [], sentAway: [], returned: [], staging: {}, events: [] };
   if (!text || typeof text !== 'string') return empty;
   let raw = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   const a = raw.indexOf('{');
@@ -191,6 +208,13 @@ export function parseDirection(text) {
     left: arr(obj.left),
     sentAway: arr(obj.sent_away ?? obj.sentAway),
     returned: arr(obj.returned),
+    staging: obj.staging && typeof obj.staging === 'object' && !Array.isArray(obj.staging)
+      ? Object.fromEntries(
+          Object.entries(obj.staging)
+            .filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && v.trim())
+            .map(([k, v]) => [k.trim(), v.trim().slice(0, 80)])
+        )
+      : {},
     events,
   };
 }
