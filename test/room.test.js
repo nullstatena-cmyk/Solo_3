@@ -75,6 +75,21 @@ it('emits no guard when nobody is flagged', () => {
   assert.doesNotMatch(b.content, /minor/i);
 });
 
+it('punctuates cleanly whichever fields are missing', () => {
+  const scene = { staging: { c: 'up, between the slab and the bus' } };
+  const b = buildRoomBlock({ presentCast: [artemis, conner], persona: theo, scene });
+  assert.match(b.content, /Artemis \(she\) — Voice: flat, sarcastic, clipped\./, 'no staging: still one clean sentence');
+  assert.match(b.content, /Superboy \(he\) — up, between the slab and the bus\. Voice: short declaratives, no small talk\./);
+  assert.doesNotMatch(b.content, /\)\s+Voice/, 'never runs the name straight into the voice tag');
+  assert.doesNotMatch(b.content, /\.\./, 'no doubled full stops');
+});
+
+it('does not put a full stop after a truncated voice fallback', () => {
+  const long = { id: 'z', name: 'Kaldur', personality: 'Formal and measured and given to long careful sentences that keep going well past any reasonable point' };
+  const b = buildRoomBlock({ presentCast: [long] });
+  assert.doesNotMatch(b.content, /…\./);
+});
+
 it('returns null with nothing to describe', () => {
   assert.equal(buildRoomBlock({ presentCast: [], persona: null }), null);
 });
