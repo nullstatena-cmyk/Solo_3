@@ -12,6 +12,8 @@
 
 import { activePath, apiRole } from './tree.js';
 import { splitDirection, buildDirectionMessage } from './direction.js';
+import { buildRoomBlock } from './room.js';
+import { selectRecall, buildRecallBlock } from './recall.js';
 
 /** Fill {{char}} and {{user}} (and the {{name}} spellings) throughout a string. */
 export function fillPlaceholders(text, { charName, userName }) {
@@ -183,9 +185,9 @@ export function buildWorldMessages({ chat, world, persona = null, settings = {},
   if (system) messages.push({ role: 'system', content: system });
 
   const done = new Set(chat.summarizedIds || []);
-  const path = activePath(chat).filter(
-    (node) => apiRole(node.role) !== 'system' && !(node.parentId != null && done.has(node.id))
-  );
+  const all = activePath(chat).filter((node) => apiRole(node.role) !== 'system');
+  const folded = all.filter((node) => node.parentId != null && done.has(node.id));
+  const path = all.filter((node) => !(node.parentId != null && done.has(node.id)));
 
   // Bracketed spans in a user turn are authorial direction, not persona speech.
   // In turns already played they become plain narration — the reply after them
@@ -217,6 +219,25 @@ export function buildWorldMessages({ chat, world, persona = null, settings = {},
 
   // The author's note is injected LAST — after budget trimming, so it can never
   // be cut, and adjacent to the reply, where instruction-following is strongest.
+  // Everything below is pushed after trimming, furthest-to-nearest in order of
+  // how binding it is: recall is reference material, the note is standing style,
+  // the room block is who's here and how they sound, and direction is fact about
+  // this turn. Last position is strongest, so direction ends up closest to the
+  // generation point and none of it can be trimmed away.
+
+  // Verbatim excerpts of folded turns, retrieved against the live window. Costs
+  // nothing when nothing matches, which is most turns.
+  if (settings.recall !== false && folded.length) {
+    const window = path.slice(-6).map((n) => n.content).join('\n');
+    const query = `${window}\n${presentCast.map((c) => c.name).join(' ')}`;
+    const turns = selectRecall(folded, query, {
+      maxTokens: settings.recallTokens || 900,
+      topK: settings.recallTurns || 6,
+    });
+    const block = buildRecallBlock(turns, { personaName: persona?.name });
+    if (block) trimmed.push(block);
+  }
+
   const note = String(authorNote || '').trim();
   if (note) {
     trimmed.push({
@@ -225,9 +246,9 @@ export function buildWorldMessages({ chat, world, persona = null, settings = {},
     });
   }
 
-  // Direction goes after the note and after trimming: last position, never cut.
-  // The note is standing style guidance; this is a binding fact about this turn,
-  // so it sits closest to the generation point.
+  const room = buildRoomBlock({ presentCast, persona, scene });
+  if (room) trimmed.push(room);
+
   const dirMsg = buildDirectionMessage(directions);
   if (dirMsg) trimmed.push(dirMsg);
 
