@@ -11,6 +11,7 @@
  */
 
 import { activePath, apiRole } from './tree.js';
+import { splitDirection, buildDirectionMessage } from './direction.js';
 
 /** Fill {{char}} and {{user}} (and the {{name}} spellings) throughout a string. */
 export function fillPlaceholders(text, { charName, userName }) {
@@ -182,11 +183,35 @@ export function buildWorldMessages({ chat, world, persona = null, settings = {},
   if (system) messages.push({ role: 'system', content: system });
 
   const done = new Set(chat.summarizedIds || []);
-  for (const node of activePath(chat)) {
-    if (apiRole(node.role) === 'system') continue;
-    if (node.parentId != null && done.has(node.id)) continue; // folded into the summary
-    messages.push({ role: apiRole(node.role), content: fillPlaceholders(node.content, names) });
-  }
+  const path = activePath(chat).filter(
+    (node) => apiRole(node.role) !== 'system' && !(node.parentId != null && done.has(node.id))
+  );
+
+  // Bracketed spans in a user turn are authorial direction, not persona speech.
+  // In turns already played they become plain narration — the reply after them
+  // already made them true, and leaving the brackets in only teaches the model to
+  // imitate the convention in its own output. In the newest turn they are lifted
+  // out entirely and re-injected below, where they can't read as a proposal.
+  const lastUserIdx = path.reduce((found, n, i) => (apiRole(n.role) === 'user' ? i : found), -1);
+  let directions = [];
+
+  path.forEach((node, i) => {
+    const role = apiRole(node.role);
+    if (role !== 'user') {
+      messages.push({ role, content: fillPlaceholders(node.content, names) });
+      return;
+    }
+    const split = splitDirection(node.content);
+    if (i !== lastUserIdx) {
+      messages.push({ role, content: fillPlaceholders(split.inlined, names) });
+      return;
+    }
+    directions = split.directions.map((d) => fillPlaceholders(d, names));
+    // A direction-only turn leaves nothing for the persona to have said; the
+    // direction message below carries it instead of an empty user turn.
+    const spoken = fillPlaceholders(split.spoken, names);
+    if (spoken) messages.push({ role, content: spoken });
+  });
 
   const trimmed = trimToBudget(messages, settings.contextTokens);
 
@@ -199,6 +224,13 @@ export function buildWorldMessages({ chat, world, persona = null, settings = {},
       content: `[Author's note — applies to the reply you are about to write, and takes priority over earlier style guidance]\n${note}`,
     });
   }
+
+  // Direction goes after the note and after trimming: last position, never cut.
+  // The note is standing style guidance; this is a binding fact about this turn,
+  // so it sits closest to the generation point.
+  const dirMsg = buildDirectionMessage(directions);
+  if (dirMsg) trimmed.push(dirMsg);
+
   return trimmed;
 }
 
