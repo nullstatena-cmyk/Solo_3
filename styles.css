@@ -1369,3 +1369,61 @@ body { background: var(--bg); color: var(--text); overflow: hidden; position: fi
   .ooc-modal .modal-body { flex: 1; min-height: 0; display: flex; }
   .ooc-log { max-height: none; flex: 1; }
 }
+
+/* ── Cast search, tags, and completeness warnings ─────────────────────────── */
+.cast-search {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line, #2a3142);
+  background: var(--sunk, #171b26);
+  color: inherit;
+  font: inherit;
+}
+.tag-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tag-wrap.filter { margin: 0 0 10px; }
+.tag-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sunk, #171b26);
+  border: 1px solid var(--line, #2a3142);
+  opacity: 0.85;
+}
+.tag-chip.filter { cursor: pointer; }
+.tag-chip.filter.active { background: var(--accent, #6b7cff); border-color: transparent; color: #fff; opacity: 1; }
+.tag-chip.minor { background: #4a2530; border-color: #7c3b4c; opacity: 1; }
+.row-gap, .room-warn { font-size: 11px; color: #d8a657; margin-top: 2px; }
+
+/* ── Room block editor ────────────────────────────────────────────────────── */
+.room-row { padding: 8px 0; border-bottom: 1px solid var(--line, #2a3142); }
+.room-row:last-of-type { border-bottom: 0; }
+.room-name { font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+.room-pron { font-weight: 400; opacity: 0.6; }
+.room-input {
+  width: 100%;
+  padding: 6px 9px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #2a3142);
+  background: var(--sunk, #171b26);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.room-voice { font-size: 11px; opacity: 0.6; }
+
+/* ── Prompt inspector ─────────────────────────────────────────────────────── */
+.pi-block { border: 1px solid var(--line, #2a3142); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
+.pi-block > summary {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 9px 11px; cursor: pointer; background: var(--sunk, #171b26); font-size: 12px;
+}
+.pi-label { font-weight: 600; }
+.pi-meta { opacity: 0.6; font-size: 11px; white-space: nowrap; }
+.pi-body {
+  margin: 0; padding: 10px 11px; font-size: 11px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto;
+}
+.scene-row-value.over { color: #e5786d; }
