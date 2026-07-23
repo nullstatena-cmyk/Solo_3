@@ -88,9 +88,7 @@ export function buildRoomBlock({ presentCast = [], persona = null, scene = null 
       ? 'Everyone present is a minor'
       : `${minors.map((c) => c.name).join(', ')} ${minors.length === 1 ? 'is a minor' : 'are minors'}`;
     lines.push(
-      `\n${who}. Write no romantic or sexual content involving them, and no ` +
-        `flirtation, attraction, or physical intimacy framed as romantic. ` +
-        `Warmth, loyalty, rivalry and protectiveness are all available instead.`
+      `\n${who}. Write only romantic or sexual content involving them if the bond develops '
     );
   }
 
