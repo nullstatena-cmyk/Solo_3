@@ -2053,11 +2053,26 @@ function wireEvents() {
 /* ── Boot ─────────────────────────────────────────────────────────────────── */
 
 function boot() {
-  cacheDom();
-  hydrate();
-  wireEvents();
-  renderAll();
-  autoGrow();
+  // Record progress step by step. If boot dies partway, the watchdog in
+  // index.html can name the step that failed instead of showing a blank page.
+  const trace = { done: [], step: null, error: null };
+  if (typeof window !== 'undefined') window.__soloBoot = trace;
+  const step = (name, fn) => {
+    trace.step = name;
+    fn();
+    trace.done.push(name);
+  };
+  try {
+    step('cacheDom', cacheDom);
+    step('hydrate', hydrate);
+    step('wireEvents', wireEvents);
+    step('renderAll', renderAll);
+    step('autoGrow', autoGrow);
+    if (typeof window !== 'undefined') window.__soloBooted = true;
+  } catch (err) {
+    trace.error = (err && err.stack) || String(err);
+    throw err;
+  }
 }
 
 if (typeof document !== 'undefined' && document.getElementById('sidebar')) boot();
