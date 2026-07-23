@@ -17,6 +17,7 @@ import * as W from './world.js';
 import * as memory from './memory.js';
 import * as director from './director.js';
 import * as clock from './clock.js';
+import * as room from './room.js';
 import * as F from './facts.js';
 import { normalizeCard, extractCardFromPng } from './card.js';
 
@@ -345,6 +346,64 @@ function renderSceneSummary() {
 
 /* ── Scene menu (per-chat settings: roster, persona, model, branch, delete) ── */
 
+function openPromptInspector() {
+  if (!state.activeWorld || !state.activeChat) { toast('Open a scene first.'); return; }
+  let messages;
+  try { messages = buildMessages({ preview: true }); }
+  catch (err) { toast(`Could not build the prompt: ${err.message}`, 'err'); return; }
+
+  const est = (t) => Math.ceil(String(t || '').length / 4);
+  const total = messages.reduce((n, m) => n + est(m.content) + 4, 0);
+  const budget = state.settings.contextTokens || 8000;
+
+  // Name the blocks by their marker so the list reads as the pipeline rather than
+  // as an undifferentiated stack of system messages.
+  const label = (m, i) => {
+    const c = m.content;
+    if (/^\[PRESENT —/.test(c)) return 'Room block';
+    if (/^\[Authorial direction/.test(c)) return 'Direction';
+    if (/^\[Author's note/.test(c)) return "Author's note";
+    if (/^\[EARLIER IN THIS SCENE/.test(c)) return 'Verbatim recall';
+    if (m.role === 'system') return i === 0 ? 'System — world, cast, lore, facts' : 'System';
+    return m.role === 'user' ? 'You' : 'Reply';
+  };
+
+  const rows = messages
+    .map((m, i) => {
+      const t = est(m.content);
+      const pct = Math.round((t / Math.max(1, total)) * 100);
+      return `
+      <details class="pi-block">
+        <summary>
+          <span class="pi-label">${escapeHtml(label(m, i))}</span>
+          <span class="pi-meta">${m.role} · ~${t} tok · ${pct}%</span>
+        </summary>
+        <pre class="pi-body">${escapeHtml(m.content)}</pre>
+      </details>`;
+    })
+    .join('');
+
+  const over = total > budget;
+  const body = `
+    <div class="scene-row">
+      <div>
+        <div class="scene-row-label">Assembled prompt</div>
+        <div class="scene-row-value${over ? ' over' : ''}">~${total} tokens of ${budget}${over ? ' — over budget' : ''}</div>
+      </div>
+      <button class="mini-btn" data-copy-prompt>Copy all</button>
+    </div>
+    <span class="note-hint">In send order. The last block is closest to the generation point and carries the most weight — if something is being ignored, check how far up it is.</span>
+    <div class="divider"></div>
+    ${rows}`;
+
+  const modal = openModal(modalShell('What the model receives', body, '<button class="btn ghost" data-close>Close</button>', { wide: true }));
+  modal.querySelector('[data-copy-prompt]').onclick = async () => {
+    const text = messages.map((m) => `### ${m.role}\n${m.content}`).join('\n\n');
+    try { await navigator.clipboard.writeText(text); toast('Prompt copied.', 'ok'); }
+    catch { toast('Could not copy.', 'err'); }
+  };
+}
+
 function openSceneMenu() {
   const chat = state.activeChat;
   const world = state.activeWorld;
@@ -403,6 +462,17 @@ function openSceneMenu() {
       <div class="scene-section-head">On stage — can act now (${present.length})</div>
       <div class="chip-wrap">${presentChips}</div>
     </div>
+    ${present.length ? `<div class="scene-section">
+      <div class="scene-section-head">Room block — goes in last, just above your message</div>
+      ${present.map((c) => `
+        <div class="room-row">
+          <div class="room-name">${escapeHtml(c.name)}${c.pronoun ? ` <span class="room-pron">(${escapeHtml(c.pronoun)})</span>` : ' <span class="room-warn" title="No pronoun set — the model will guess">⚠ no pronoun</span>'}</div>
+          <input type="text" class="room-input" data-staging="${escapeAttr(c.id)}" value="${escapeAttr((st.staging || {})[c.id] || '')}" placeholder="where they are — the director fills this in" />
+          <input type="text" class="room-input" data-bond="${escapeAttr(c.id)}" value="${escapeAttr((st.bonds || {})[c.id] || '')}" placeholder="how they feel about ${escapeAttr(persona?.name || 'you')} right now" />
+          ${c.voice ? `<div class="room-voice">Voice: ${escapeHtml(c.voice)}</div>` : '<div class="room-warn">⚠ no voice tag — falls back to Personality</div>'}
+        </div>`).join('')}
+      <span class="note-hint">Bonds are the fix for a character reading a scene the wrong way. Staging answers "who was closest". Saved when you tap away.</span>
+    </div>` : ''}
     ${away.length ? `<div class="scene-section"><div class="scene-section-head">Elsewhere / away</div><div class="chip-wrap">${awayChips}</div></div>` : ''}
     <div class="scene-section">
       <div class="scene-section-head">Nearby — bring into the scene</div>
@@ -429,6 +499,10 @@ function openSceneMenu() {
     <div class="scene-row">
       <div><div class="scene-row-label">Memory</div><div class="scene-row-value">${(chat.facts || []).length} fact${(chat.facts || []).length === 1 ? '' : 's'} in this scene</div></div>
       <button class="mini-btn" data-open-memory>Open</button>
+    </div>
+    <div class="scene-row">
+      <div><div class="scene-row-label">Prompt</div><div class="scene-row-value">See exactly what gets sent</div></div>
+      <button class="mini-btn" data-open-prompt>Inspect</button>
     </div>`;
   const foot = `<button class="btn ghost" data-close>Done</button><button class="btn" data-branch-scene>⑃ Branch</button><button class="btn danger" data-del-scene>Delete scene</button>`;
   const modal = openModal(modalShell('Scene director', body, foot, { wide: true }));
@@ -447,6 +521,18 @@ function openSceneMenu() {
   if (noteBox) noteBox.onchange = () => { chat.authorNote = noteBox.value.trim(); persistChat(chat); toast(chat.authorNote ? 'Author’s note saved.' : 'Author’s note cleared.', 'ok'); };
   const clearNote = modal.querySelector('[data-clear-note]');
   if (clearNote) clearNote.onclick = () => { chat.authorNote = ''; persistChat(chat); openSceneMenu(); };
+  modal.querySelectorAll('[data-staging]').forEach((el) => (el.onchange = () => {
+    const sc = ensureScene(chat);
+    sc.staging = { ...(sc.staging || {}) };
+    const v = el.value.trim();
+    if (v) sc.staging[el.dataset.staging] = v; else delete sc.staging[el.dataset.staging];
+    persistChat(chat);
+  }));
+  modal.querySelectorAll('[data-bond]').forEach((el) => (el.onchange = () => {
+    chat.sceneState = room.setBond(ensureScene(chat), el.dataset.bond, el.value);
+    persistChat(chat);
+  }));
+  modal.querySelector('[data-open-prompt]').onclick = openPromptInspector;
   modal.querySelector('[data-change-persona]').onclick = openPersonas;
   modal.querySelector('[data-open-settings]').onclick = openSettings;
   modal.querySelector('[data-open-memory]').onclick = openMemory;
@@ -566,7 +652,7 @@ function recentTextFor(chat) {
   return [persona?.description || '', ...path].join('\n');
 }
 
-function buildMessages() {
+function buildMessages({ preview = false } = {}) {
   const world = state.activeWorld;
   const chat = state.activeChat;
   const persona = currentPersona();
@@ -579,10 +665,13 @@ function buildMessages() {
     present: st.present.map(nameOf).filter(Boolean),
     away: st.away.map(nameOf).filter(Boolean),
     justNow: [...(st.justNow || [])],
+    staging: { ...(st.staging || {}) },
+    bonds: { ...(st.bonds || {}) },
   };
   const messages = prompt.buildWorldMessages({ chat, world, persona, settings: state.settings, lore, facts: gated, summary: chat.summary || '', scene, authorNote: chat.authorNote || '' });
-  // "Just now" arrivals are announced once, then cleared.
-  if (st.justNow?.length) { st.justNow = []; persistChat(chat); }
+  // "Just now" arrivals are announced once, then cleared — but a preview must not
+  // consume them, or opening the inspector would silently eat an announcement.
+  if (!preview && st.justNow?.length) { st.justNow = []; persistChat(chat); }
   return messages;
 }
 
@@ -1463,33 +1552,94 @@ async function importWorld() {
 
 function openCast() {
   if (!state.activeWorld) { toast('Create a world first.'); return openWorlds(); }
-  const rows = state.activeWorld.cast
-    .map((c) => `
+  const cast = state.activeWorld.cast;
+  const allTags = [...new Set(cast.flatMap((c) => c.tags || []))].sort();
+  let query = '';
+  let tag = '';
+
+  // Match on name, tags, and description, so "speedster" or "gotham" find people
+  // even when the word never appears in their name.
+  const matches = (c) => {
+    if (tag && !(c.tags || []).includes(tag)) return false;
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      (c.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+      (c.description || '').toLowerCase().includes(q) ||
+      (c.personality || '').toLowerCase().includes(q)
+    );
+  };
+
+  const rowsFor = (list) =>
+    list
+      .map((c) => {
+        const gaps = [!c.pronoun && 'pronoun', !c.voice && 'voice tag'].filter(Boolean);
+        const tags = (c.tags || []).map((t) => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('');
+        return `
       <div class="list-row">
         <div class="row-avatar">${avatarMarkup(c.avatar, '🎭')}</div>
-        <div class="row-main"><div class="row-name">${escapeHtml(c.name)}</div><div class="row-sub">${escapeHtml((c.description || '').slice(0, 80) || 'No description')}</div></div>
+        <div class="row-main">
+          <div class="row-name">${escapeHtml(c.name)}${c.minor ? ' <span class="tag-chip minor">minor</span>' : ''}</div>
+          <div class="row-sub">${escapeHtml((c.description || '').slice(0, 70) || 'No description')}</div>
+          ${tags ? `<div class="tag-wrap">${tags}</div>` : ''}
+          ${gaps.length ? `<div class="row-gap">⚠ no ${gaps.join(', no ')}</div>` : ''}
+        </div>
         <div class="row-acts">
           <button class="mini-btn" data-edit-cast="${escapeAttr(c.id)}">Edit</button>
           <button class="mini-btn danger" data-del-cast="${escapeAttr(c.id)}">Delete</button>
         </div>
-      </div>`)
-    .join('') || '<p class="modal-note">No cast yet. Add the characters the AI will play.</p>';
+      </div>`;
+      })
+      .join('') || '<p class="modal-note">Nothing matches.</p>';
+
+  const head = `
+    <input type="text" class="cast-search" data-cast-search placeholder="Search ${cast.length} character${cast.length === 1 ? '' : 's'} — name, tag, description…" />
+    ${allTags.length ? `<div class="tag-wrap filter">
+      <span class="tag-chip filter active" data-tag="">all</span>
+      ${allTags.map((t) => `<span class="tag-chip filter" data-tag="${escapeAttr(t)}">${escapeHtml(t)}</span>`).join('')}
+    </div>` : ''}
+    <div data-cast-rows>${cast.length ? rowsFor(cast) : '<p class="modal-note">No cast yet. Add the characters the AI will play.</p>'}</div>`;
+
   const foot = `<button class="btn ghost" data-close>Close</button><button class="btn" data-import-cast>⭱ Import card</button><button class="btn primary" data-new-cast>＋ New character</button>`;
-  const modal = openModal(modalShell(`Cast of ${state.activeWorld.name}`, rows, foot, { wide: true }));
-  modal.querySelectorAll('[data-edit-cast]').forEach((b) => (b.onclick = () => castEditor(b.dataset.editCast)));
-  modal.querySelectorAll('[data-del-cast]').forEach((b) => (b.onclick = () => confirmDeleteCast(b.dataset.delCast)));
+  const modal = openModal(modalShell(`Cast of ${state.activeWorld.name}`, head, foot, { wide: true }));
+
+  // Re-render only the rows, never the search box — replacing the input would
+  // drop the mobile keyboard mid-word.
+  const rowBox = modal.querySelector('[data-cast-rows]');
+  const bindRows = () => {
+    rowBox.querySelectorAll('[data-edit-cast]').forEach((b) => (b.onclick = () => castEditor(b.dataset.editCast)));
+    rowBox.querySelectorAll('[data-del-cast]').forEach((b) => (b.onclick = () => confirmDeleteCast(b.dataset.delCast)));
+  };
+  const refresh = () => { rowBox.innerHTML = rowsFor(cast.filter(matches)); bindRows(); };
+  bindRows();
+
+  const search = modal.querySelector('[data-cast-search]');
+  if (search) search.oninput = () => { query = search.value.trim(); refresh(); };
+  modal.querySelectorAll('[data-tag]').forEach((el) => (el.onclick = () => {
+    tag = el.dataset.tag;
+    modal.querySelectorAll('[data-tag]').forEach((o) => o.classList.toggle('active', o === el));
+    refresh();
+  }));
+
   modal.querySelector('[data-new-cast]').onclick = () => castEditor(null);
   modal.querySelector('[data-import-cast]').onclick = importCharacter;
 }
 
 function castEditor(id) {
-  const c = id ? castById(id) : { id: null, name: '', avatar: '🎭', description: '', personality: '', scenario: '', greeting: '', exampleDialogue: '' };
+  const c = id ? castById(id) : { id: null, name: '', avatar: '🎭', pronoun: '', voice: '', minor: false, tags: [], description: '', personality: '', scenario: '', greeting: '', exampleDialogue: '' };
   const body = `
     <div class="field-row">
       <div class="field" style="flex:0 0 120px;"><label>Avatar</label><input type="text" id="c-avatar" value="${escapeAttr(c.avatar)}" placeholder="🎭 or URL" /></div>
       <div class="field"><label>Name</label><input type="text" id="c-name" value="${escapeAttr(c.name)}" placeholder="Character name" /></div>
     </div>
     <div class="field"><label>Description</label><textarea id="c-desc" placeholder="Who they are, appearance, background…">${escapeHtml(c.description)}</textarea></div>
+    <div class="field-row">
+      <div class="field" style="flex:0 0 120px;"><label>Pronoun</label><input type="text" id="c-pron" value="${escapeAttr(c.pronoun || '')}" placeholder="he / she / they" /></div>
+      <div class="field"><label>Voice tag</label><input type="text" id="c-voice" value="${escapeAttr(c.voice || '')}" placeholder="~8 words of mannerism — goes at the bottom of every prompt" /></div>
+    </div>
+    <div class="field"><label>Tags</label><input type="text" id="c-tags" value="${escapeAttr((c.tags || []).join(', '))}" placeholder="team, gotham, speedster — comma separated, for searching" /></div>
+    <div class="field"><label class="dir-toggle"><input type="checkbox" id="c-minor" ${c.minor ? 'checked' : ''}/> <span>Minor — blocks romantic/sexual content involving this character</span></label></div>
     <div class="field"><label>Personality</label><textarea id="c-pers" placeholder="Traits, voice, quirks…">${escapeHtml(c.personality)}</textarea></div>
     <div class="field"><label>Greeting (used to open a solo scene)</label><textarea id="c-greet" placeholder="Optional opening line. *Actions in asterisks.*">${escapeHtml(c.greeting)}</textarea></div>
     <div class="field"><label>Example dialogue (optional)</label><textarea id="c-ex" placeholder="{{user}}: …&#10;{{char}}: …">${escapeHtml(c.exampleDialogue)}</textarea></div>`;
@@ -1497,7 +1647,7 @@ function castEditor(id) {
   const modal = openModal(modalShell(id ? 'Edit character' : 'New character', body, foot, { wide: true }));
   modal.querySelector('[data-save-cast]').onclick = () => {
     const g = (sel) => modal.querySelector(sel).value;
-    const data = { name: g('#c-name').trim() || 'Unnamed', avatar: g('#c-avatar').trim() || '🎭', description: g('#c-desc').trim(), personality: g('#c-pers').trim(), greeting: g('#c-greet'), exampleDialogue: g('#c-ex') };
+    const data = { name: g('#c-name').trim() || 'Unnamed', avatar: g('#c-avatar').trim() || '🎭', pronoun: g('#c-pron').trim(), voice: g('#c-voice').trim(), tags: g('#c-tags').split(',').map((t) => t.trim()).filter(Boolean), minor: !!modal.querySelector('#c-minor')?.checked, description: g('#c-desc').trim(), personality: g('#c-pers').trim(), greeting: g('#c-greet'), exampleDialogue: g('#c-ex') };
     if (id) { Object.assign(castById(id), data); }
     else { W.addCharacter(state.activeWorld, W.createCharacter(data)); }
     persistWorld();
@@ -1724,7 +1874,7 @@ function openSettings() {
       <div class="hint">Stored only in this browser. Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.</div></div>
     <div class="field"><label>Model</label><input type="text" id="f-model" value="${escapeAttr(s.model)}" list="model-suggestions" placeholder="author/model-name" /><datalist id="model-suggestions">${datalist}</datalist>
       <div class="hint">Copy the exact ID from <a href="https://openrouter.ai/models" target="_blank" rel="noopener">openrouter.ai/models</a>.</div></div>
-    <div class="field"><label>Memory model (optional)</label><input type="text" id="f-umodel" value="${escapeAttr(s.utilityModel)}" list="model-suggestions" placeholder="blank = same as model" />
+    <div class="field"><label>Utility model (optional)</label><input type="text" id="f-umodel" value="${escapeAttr(s.utilityModel)}" list="model-suggestions" placeholder="blank = same as model" />
       <div class="hint">Used for fact extraction and summaries. A cheaper model here saves money.</div></div>
     <div class="field-row">
       <div class="field"><label>Temperature</label><input type="number" id="f-temp" step="0.05" min="0" max="2" value="${s.temperature}" /></div>
